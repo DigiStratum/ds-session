@@ -203,7 +203,7 @@ The client uses standard AWS SDK credential chain. Configure via:
 This module requires read access to these DynamoDB tables:
 
 - `dsaccount-sessions-{env}`
-- `dsaccount-organizations-{env}`
+- `dsaccount-orgs-{env}`
 - `dsaccount-org-members-{env}`
 
 ### Required IAM Permissions
@@ -219,7 +219,7 @@ This module requires read access to these DynamoDB tables:
             ],
             "Resource": [
                 "arn:aws:dynamodb:*:*:table/dsaccount-sessions-*",
-                "arn:aws:dynamodb:*:*:table/dsaccount-organizations-*"
+                "arn:aws:dynamodb:*:*:table/dsaccount-orgs-*"
             ]
         },
         {

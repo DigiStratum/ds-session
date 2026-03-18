@@ -156,8 +156,8 @@ func TestNewClientTableNames(t *testing.T) {
 			if client.sessionsTable != "dsaccount-sessions-prod" {
 				t.Errorf("expected sessions table 'dsaccount-sessions-prod', got '%s'", client.sessionsTable)
 			}
-			if client.orgsTable != "dsaccount-organizations-prod" {
-				t.Errorf("expected orgs table 'dsaccount-organizations-prod', got '%s'", client.orgsTable)
+			if client.orgsTable != "dsaccount-orgs-prod" {
+				t.Errorf("expected orgs table 'dsaccount-orgs-prod', got '%s'", client.orgsTable)
 			}
 			if client.orgMembersTable != "dsaccount-org-members-prod" {
 				t.Errorf("expected org-members table 'dsaccount-org-members-prod', got '%s'", client.orgMembersTable)

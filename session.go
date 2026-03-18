@@ -111,7 +111,7 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 	env := getEnv()
 	c := &Client{
 		sessionsTable:   fmt.Sprintf("dsaccount-sessions-%s", env),
-		orgsTable:       fmt.Sprintf("dsaccount-organizations-%s", env),
+		orgsTable:       fmt.Sprintf("dsaccount-orgs-%s", env),
 		orgMembersTable: fmt.Sprintf("dsaccount-org-members-%s", env),
 	}
 
