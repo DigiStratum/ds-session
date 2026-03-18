@@ -28,6 +28,16 @@ var (
 	ErrTenantNotFound   = errors.New("tenant not found")
 )
 
+// TenantType indicates whether the context is personal or organizational.
+type TenantType string
+
+const (
+	// TenantTypePersonal indicates the user is operating in their personal context (no org selected).
+	TenantTypePersonal TenantType = "personal"
+	// TenantTypeOrganization indicates the user is operating within an organization.
+	TenantTypeOrganization TenantType = "organization"
+)
+
 // Session represents a user session from DSAccount.
 type Session struct {
 	ID             string     `dynamodbav:"id"`
@@ -40,21 +50,23 @@ type Session struct {
 
 // TenantContext represents the user's context within a tenant/organization.
 type TenantContext struct {
-	ID    string   // Organization ID
-	Name  string   // Organization name
-	Role  string   // Primary role (first role, for backwards compatibility)
-	Roles []string // User's roles in this tenant (e.g., ["owner", "admin"])
+	Type  TenantType // "personal" or "organization"
+	ID    string     // Organization ID (empty for personal)
+	Name  string     // Organization name (empty for personal)
+	Role  string     // Primary role (first role, for backwards compatibility)
+	Roles []string   // User's roles in this tenant (e.g., ["owner", "admin"])
 }
 
 // SessionContext combines session and tenant information.
 type SessionContext struct {
 	Session *Session       // Session details
-	Tenant  *TenantContext // Current tenant context (nil if no tenant selected)
+	Tenant  *TenantContext // Current tenant context (never nil - uses personal context if no org)
 }
 
 // organization represents the DynamoDB organization record.
+// Note: DSAccount stores org ID in "PK" attribute, not "id".
 type organization struct {
-	ID   string `dynamodbav:"id"`
+	ID   string `dynamodbav:"PK"`   // Primary key attribute in DynamoDB
 	Name string `dynamodbav:"name"`
 }
 
@@ -62,7 +74,8 @@ type organization struct {
 type orgMember struct {
 	UserID string   `dynamodbav:"user_id"`
 	OrgID  string   `dynamodbav:"org_id"`
-	Roles  []string `dynamodbav:"roles"`
+	Role   string   `dynamodbav:"role"`   // Current schema: singular role
+	Status string   `dynamodbav:"status"`
 }
 
 // Client provides read-only access to DSAccount session data.
@@ -88,7 +101,7 @@ func WithTablePrefix(prefix string) ClientOption {
 	return func(c *Client) {
 		env := getEnv()
 		c.sessionsTable = fmt.Sprintf("%s-sessions-%s", prefix, env)
-		c.orgsTable = fmt.Sprintf("%s-orgs-%s", prefix, env)
+		c.orgsTable = fmt.Sprintf("%s-organizations-%s", prefix, env)
 		c.orgMembersTable = fmt.Sprintf("%s-org-members-%s", prefix, env)
 	}
 }
@@ -98,7 +111,7 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 	env := getEnv()
 	c := &Client{
 		sessionsTable:   fmt.Sprintf("dsaccount-sessions-%s", env),
-		orgsTable:       fmt.Sprintf("dsaccount-orgs-%s", env),
+		orgsTable:       fmt.Sprintf("dsaccount-organizations-%s", env),
 		orgMembersTable: fmt.Sprintf("dsaccount-org-members-%s", env),
 	}
 
@@ -122,6 +135,9 @@ func NewClient(opts ...ClientOption) (*Client, error) {
 // Returns ErrSessionNotFound if the session doesn't exist,
 // ErrSessionExpired if the session has expired,
 // ErrSessionLoggedOut if the session was invalidated.
+//
+// If the session has no current tenant (CurrentTenant is empty), returns
+// a TenantContext with Type=TenantTypePersonal and empty ID/Name/Roles.
 func (c *Client) GetContext(sessionID string) (*SessionContext, error) {
 	ctx := context.Background()
 
@@ -133,13 +149,21 @@ func (c *Client) GetContext(sessionID string) (*SessionContext, error) {
 
 	result := &SessionContext{Session: session}
 
-	// Get tenant context if a tenant is selected
+	// Get tenant context - either organization or personal
 	if session.CurrentTenant != "" {
 		tenant, err := c.getTenantContext(ctx, session.UserID, session.CurrentTenant)
 		if err != nil && !errors.Is(err, ErrTenantNotFound) {
 			return nil, fmt.Errorf("failed to get tenant context: %w", err)
 		}
-		result.Tenant = tenant
+		if tenant != nil {
+			result.Tenant = tenant
+		} else {
+			// Tenant not found - fall back to personal context
+			result.Tenant = &TenantContext{Type: TenantTypePersonal}
+		}
+	} else {
+		// No tenant selected - personal context
+		result.Tenant = &TenantContext{Type: TenantTypePersonal}
 	}
 
 	return result, nil
@@ -185,10 +209,11 @@ func (c *Client) getSession(ctx context.Context, sessionID string) (*Session, er
 
 func (c *Client) getTenantContext(ctx context.Context, userID, orgID string) (*TenantContext, error) {
 	// Get organization details
+	// Note: DSAccount organizations table uses "PK" as the primary key attribute
 	orgResult, err := c.db.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(c.orgsTable),
 		Key: map[string]types.AttributeValue{
-			"id": &types.AttributeValueMemberS{Value: orgID},
+			"PK": &types.AttributeValueMemberS{Value: orgID},
 		},
 	})
 	if err != nil {
@@ -204,25 +229,33 @@ func (c *Client) getTenantContext(ctx context.Context, userID, orgID string) (*T
 		return nil, fmt.Errorf("failed to unmarshal organization: %w", err)
 	}
 
-	// Get user's membership/roles in this org
-	memberResult, err := c.db.GetItem(ctx, &dynamodb.GetItemInput{
-		TableName: aws.String(c.orgMembersTable),
-		Key: map[string]types.AttributeValue{
-			"user_id": &types.AttributeValueMemberS{Value: userID},
-			"org_id":  &types.AttributeValueMemberS{Value: orgID},
+	// Get user's membership/roles in this org via GSI query
+	// The org-members table uses PK (UUID) + SK (user_id) as primary key,
+	// but has a GSI "user-orgs-index" on user_id for efficient lookups.
+	memberResult, err := c.db.Query(ctx, &dynamodb.QueryInput{
+		TableName:              aws.String(c.orgMembersTable),
+		IndexName:              aws.String("user-orgs-index"),
+		KeyConditionExpression: aws.String("user_id = :user_id"),
+		FilterExpression:       aws.String("org_id = :org_id"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":user_id": &types.AttributeValueMemberS{Value: userID},
+			":org_id":  &types.AttributeValueMemberS{Value: orgID},
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get org membership: %w", err)
+		return nil, fmt.Errorf("failed to query org membership: %w", err)
 	}
 
 	var roles []string
-	if memberResult.Item != nil {
+	if len(memberResult.Items) > 0 {
 		var member orgMember
-		if err := attributevalue.UnmarshalMap(memberResult.Item, &member); err != nil {
+		if err := attributevalue.UnmarshalMap(memberResult.Items[0], &member); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal membership: %w", err)
 		}
-		roles = member.Roles
+		// Only include roles if membership is active
+		if member.Status == "active" || member.Status == "" {
+			if member.Role != "" { roles = []string{member.Role} }
+		}
 	}
 
 	// Compute primary role (first role) for backwards compatibility
@@ -232,6 +265,7 @@ func (c *Client) getTenantContext(ctx context.Context, userID, orgID string) (*T
 	}
 
 	return &TenantContext{
+		Type:  TenantTypeOrganization,
 		ID:    org.ID,
 		Name:  org.Name,
 		Role:  primaryRole,

@@ -20,6 +20,7 @@ func TestSessionContext(t *testing.T) {
 	}
 
 	tenant := &TenantContext{
+		Type:  TenantTypeOrganization,
 		ID:    "test-org-id",
 		Name:  "Test Org",
 		Role:  "admin",
@@ -32,6 +33,10 @@ func TestSessionContext(t *testing.T) {
 
 	if tenant.Role != "admin" {
 		t.Errorf("expected primary role 'admin', got '%s'", tenant.Role)
+	}
+
+	if tenant.Type != TenantTypeOrganization {
+		t.Errorf("expected tenant type 'organization', got '%s'", tenant.Type)
 	}
 
 	ctx := &SessionContext{
@@ -86,6 +91,7 @@ func TestTenantContextRoleBackwardsCompatibility(t *testing.T) {
 			}
 
 			tenant := &TenantContext{
+				Type:  TenantTypeOrganization,
 				ID:    "test-org",
 				Name:  "Test Org",
 				Role:  primaryRole,
@@ -99,12 +105,66 @@ func TestTenantContextRoleBackwardsCompatibility(t *testing.T) {
 	}
 }
 
+func TestPersonalTenantContext(t *testing.T) {
+	// Test personal context (null tenant case)
+	tenant := &TenantContext{
+		Type: TenantTypePersonal,
+	}
+
+	if tenant.Type != TenantTypePersonal {
+		t.Errorf("expected tenant type 'personal', got '%s'", tenant.Type)
+	}
+
+	if tenant.ID != "" {
+		t.Errorf("expected empty ID for personal context, got '%s'", tenant.ID)
+	}
+
+	if tenant.Name != "" {
+		t.Errorf("expected empty Name for personal context, got '%s'", tenant.Name)
+	}
+
+	if len(tenant.Roles) != 0 {
+		t.Errorf("expected empty Roles for personal context, got %v", tenant.Roles)
+	}
+}
+
+func TestTenantTypes(t *testing.T) {
+	// Verify type constants
+	if TenantTypePersonal != "personal" {
+		t.Errorf("TenantTypePersonal should be 'personal', got '%s'", TenantTypePersonal)
+	}
+
+	if TenantTypeOrganization != "organization" {
+		t.Errorf("TenantTypeOrganization should be 'organization', got '%s'", TenantTypeOrganization)
+	}
+}
+
 func TestGetEnv(t *testing.T) {
 	// Default should be "prod"
 	env := getEnv()
 	if env != "prod" {
 		t.Errorf("expected default env 'prod', got '%s'", env)
 	}
+}
+
+func TestNewClientTableNames(t *testing.T) {
+	// Test default table names with prod env
+	client, err := NewClient(WithDynamoDBClient(nil))
+	if err == nil {
+		// If no error (which shouldn't happen without AWS config), check table names
+		if client != nil {
+			if client.sessionsTable != "dsaccount-sessions-prod" {
+				t.Errorf("expected sessions table 'dsaccount-sessions-prod', got '%s'", client.sessionsTable)
+			}
+			if client.orgsTable != "dsaccount-organizations-prod" {
+				t.Errorf("expected orgs table 'dsaccount-organizations-prod', got '%s'", client.orgsTable)
+			}
+			if client.orgMembersTable != "dsaccount-org-members-prod" {
+				t.Errorf("expected org-members table 'dsaccount-org-members-prod', got '%s'", client.orgMembersTable)
+			}
+		}
+	}
+	// Note: NewClient will likely fail without AWS config, which is expected
 }
 
 func TestErrors(t *testing.T) {

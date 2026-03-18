@@ -28,14 +28,39 @@ if err != nil {
 // Get session context from session ID (from ds_session cookie)
 ctx, err := client.GetContext(sessionID)
 if err != nil {
-    // Session not found, expired, or logged out
+    // Handle: ErrSessionNotFound, ErrSessionExpired, ErrSessionLoggedOut
     return err
 }
 
 // Access session and tenant info
 fmt.Printf("User: %s\n", ctx.Session.UserID)
-fmt.Printf("Tenant: %s\n", ctx.Tenant.ID)
+fmt.Printf("Tenant Type: %s\n", ctx.Tenant.Type)  // "personal" or "organization"
+fmt.Printf("Tenant ID: %s\n", ctx.Tenant.ID)      // empty for personal
+fmt.Printf("Tenant Name: %s\n", ctx.Tenant.Name)
 fmt.Printf("Roles: %v\n", ctx.Tenant.Roles)
+```
+
+### Handling Personal Context (null tenant)
+
+When a user hasn't selected an organization, `GetContext` returns a TenantContext with `Type=TenantTypePersonal`:
+
+```go
+ctx, err := client.GetContext(sessionID)
+if err != nil {
+    return err
+}
+
+switch ctx.Tenant.Type {
+case dssession.TenantTypePersonal:
+    // User is operating in personal context (no org selected)
+    // ctx.Tenant.ID, Name, Roles will be empty
+    fmt.Println("Operating in personal context")
+    
+case dssession.TenantTypeOrganization:
+    // User is operating within an organization
+    fmt.Printf("Operating in org: %s (%s)\n", ctx.Tenant.Name, ctx.Tenant.ID)
+    fmt.Printf("User roles: %v\n", ctx.Tenant.Roles)
+}
 ```
 
 ## Permission Evaluation
@@ -109,7 +134,7 @@ perms := dssession.ComputePermissions([]string{"admin", "member"}, myAppPermissi
 ```go
 type SessionContext struct {
     Session *Session       // Session details
-    Tenant  *TenantContext // Current tenant context (may be nil)
+    Tenant  *TenantContext // Current tenant context (never nil)
 }
 ```
 
@@ -119,7 +144,7 @@ type SessionContext struct {
 type Session struct {
     ID             string
     UserID         string
-    CurrentTenant  string    // Currently selected org ID
+    CurrentTenant  string    // Currently selected org ID (empty for personal)
     ExpiresAt      time.Time
     LastActivityAt time.Time
 }
@@ -129,10 +154,23 @@ type Session struct {
 
 ```go
 type TenantContext struct {
-    ID    string   // Organization ID
-    Name  string   // Organization name
-    Roles []string // User's roles in this tenant
+    Type  TenantType // "personal" or "organization"
+    ID    string     // Organization ID (empty for personal)
+    Name  string     // Organization name (empty for personal)
+    Role  string     // Primary role (first role, for backwards compatibility)
+    Roles []string   // User's roles in this tenant
 }
+```
+
+### TenantType
+
+```go
+type TenantType string
+
+const (
+    TenantTypePersonal     TenantType = "personal"      // No org selected
+    TenantTypeOrganization TenantType = "organization"  // Operating within an org
+)
 ```
 
 ### Permission Types
@@ -165,8 +203,37 @@ The client uses standard AWS SDK credential chain. Configure via:
 This module requires read access to these DynamoDB tables:
 
 - `dsaccount-sessions-{env}`
-- `dsaccount-orgs-{env}`
+- `dsaccount-organizations-{env}`
 - `dsaccount-org-members-{env}`
+
+### Required IAM Permissions
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "dynamodb:GetItem"
+            ],
+            "Resource": [
+                "arn:aws:dynamodb:*:*:table/dsaccount-sessions-*",
+                "arn:aws:dynamodb:*:*:table/dsaccount-organizations-*"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "dynamodb:Query"
+            ],
+            "Resource": [
+                "arn:aws:dynamodb:*:*:table/dsaccount-org-members-*/index/user-orgs-index"
+            ]
+        }
+    ]
+}
+```
 
 ## License
 
