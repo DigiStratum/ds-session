@@ -238,3 +238,59 @@ This module requires read access to these DynamoDB tables:
 ## License
 
 MIT
+
+## Tenant-Scoped DynamoDB Wrapper
+
+For multi-tenant apps that store data in DynamoDB, use `TenantScopedDB` to enforce tenant isolation:
+
+```go
+// Get session context
+sessionCtx, err := client.GetContext(sessionID)
+if err != nil {
+    return err
+}
+
+// Wrap DynamoDB client with tenant scoping
+tenantDB, err := dssession.TenantDB(sessionCtx, dynamoClient)
+if err != nil {
+    if errors.Is(err, dssession.ErrNoTenantContext) {
+        // User is in personal context - handle appropriately
+    }
+    return err
+}
+
+// All operations now automatically scoped to tenant
+// Queries add tenant_id to key condition
+// Writes stamp tenant_id on items
+// Conditions prevent cross-tenant access
+tenantDB.PutItem(ctx, input)   // auto-stamps tenant_id
+tenantDB.Query(ctx, input)     // auto-adds tenant_id condition
+tenantDB.GetItem(ctx, input)   // auto-adds tenant_id to key
+```
+
+### TenantScopedDB Features
+
+- **Automatic tenant_id stamping**: All write operations (PutItem, BatchWriteItem, TransactWriteItems) automatically add `tenant_id` to items
+- **Automatic query scoping**: Query and Scan operations automatically add tenant_id conditions
+- **Cross-tenant protection**: Condition expressions prevent accidentally overwriting another tenant's data
+- **Mismatch detection**: Returns `ErrTenantMismatch` if you try to write an item with a different tenant_id
+- **Explicit tenant ID**: Use `TenantDBFromID(tenantID, db)` for service-to-service calls
+
+### Supported Operations
+
+| Operation | Tenant Scoping |
+|-----------|----------------|
+| GetItem | Adds tenant_id to key |
+| PutItem | Stamps tenant_id, adds condition |
+| UpdateItem | Adds tenant_id to key and condition |
+| DeleteItem | Adds tenant_id to key and condition |
+| Query | Adds tenant_id to key condition |
+| Scan | Adds tenant_id to filter |
+| BatchGetItem | Adds tenant_id to all keys |
+| BatchWriteItem | Stamps tenant_id on all puts |
+| TransactWriteItems | Full scoping on all operations |
+| TransactGetItems | Adds tenant_id to all keys |
+
+### Table Schema Requirement
+
+Tables using TenantScopedDB must include `tenant_id` in their key schema (typically as partition key or part of composite key).
