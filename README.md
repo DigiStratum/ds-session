@@ -17,7 +17,7 @@ go get github.com/DigiStratum/ds-session
 ## Usage
 
 ```go
-import "github.com/DigiStratum/ds-session"
+import dssession "github.com/DigiStratum/ds-session"
 
 // Create client (uses default AWS credentials)
 client, err := dssession.NewClient()
@@ -36,6 +36,70 @@ if err != nil {
 fmt.Printf("User: %s\n", ctx.Session.UserID)
 fmt.Printf("Tenant: %s\n", ctx.Tenant.ID)
 fmt.Printf("Roles: %v\n", ctx.Tenant.Roles)
+```
+
+## Permission Evaluation
+
+Apps define their own role-to-permission mappings and use helpers to compute effective permissions.
+
+### Role Checking
+
+```go
+// Check single role
+if dssession.HasRole(ctx, "admin") {
+    // User has admin role in current tenant
+}
+
+// Check any of multiple roles
+if dssession.HasAnyRole(ctx, []string{"admin", "owner"}) {
+    // User has at least one of admin or owner
+}
+
+// Check all roles required
+if dssession.HasAllRoles(ctx, []string{"admin", "billing"}) {
+    // User has both admin AND billing roles
+}
+```
+
+### Permission Mapping
+
+```go
+// Define app-specific role-to-permission mapping
+var myAppPermissions = dssession.RolePermissionMap{
+    "owner": {
+        dssession.Permission("tenant:manage"),
+        dssession.Permission("users:*"),
+        dssession.Permission("billing:*"),
+    },
+    "admin": {
+        dssession.Permission("users:read"),
+        dssession.Permission("users:write"),
+        dssession.Permission("content:*"),
+    },
+    "member": {
+        dssession.Permission("users:read"),
+        dssession.Permission("content:read"),
+    },
+}
+
+// Compute effective permissions (union of all role permissions)
+perms := dssession.GetPermissions(ctx, myAppPermissions)
+
+// Check specific permission
+if dssession.HasPermission(ctx, myAppPermissions, dssession.Permission("billing:*")) {
+    // User has billing:* permission
+}
+
+// Check any of multiple permissions
+if dssession.HasAnyPermission(ctx, myAppPermissions, []dssession.Permission{
+    "content:write",
+    "content:*",
+}) {
+    // User can write content
+}
+
+// Compute permissions from arbitrary roles
+perms := dssession.ComputePermissions([]string{"admin", "member"}, myAppPermissions)
 ```
 
 ## Types
@@ -69,6 +133,16 @@ type TenantContext struct {
     Name  string   // Organization name
     Roles []string // User's roles in this tenant
 }
+```
+
+### Permission Types
+
+```go
+// Permission represents a single permission string
+type Permission string
+
+// RolePermissionMap maps role names to their granted permissions
+type RolePermissionMap map[string][]Permission
 ```
 
 ## Configuration
