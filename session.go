@@ -42,6 +42,7 @@ type Session struct {
 type TenantContext struct {
 	ID    string   // Organization ID
 	Name  string   // Organization name
+	Role  string   // Primary role (first role, for backwards compatibility)
 	Roles []string // User's roles in this tenant (e.g., ["owner", "admin"])
 }
 
@@ -59,9 +60,9 @@ type organization struct {
 
 // orgMember represents the DynamoDB org membership record.
 type orgMember struct {
-	UserID string `dynamodbav:"user_id"`
-	OrgID  string `dynamodbav:"org_id"`
-	Role   string `dynamodbav:"role"`
+	UserID string   `dynamodbav:"user_id"`
+	OrgID  string   `dynamodbav:"org_id"`
+	Roles  []string `dynamodbav:"roles"`
 }
 
 // Client provides read-only access to DSAccount session data.
@@ -221,14 +222,19 @@ func (c *Client) getTenantContext(ctx context.Context, userID, orgID string) (*T
 		if err := attributevalue.UnmarshalMap(memberResult.Item, &member); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal membership: %w", err)
 		}
-		if member.Role != "" {
-			roles = []string{member.Role}
-		}
+		roles = member.Roles
+	}
+
+	// Compute primary role (first role) for backwards compatibility
+	var primaryRole string
+	if len(roles) > 0 {
+		primaryRole = roles[0]
 	}
 
 	return &TenantContext{
 		ID:    org.ID,
 		Name:  org.Name,
+		Role:  primaryRole,
 		Roles: roles,
 	}, nil
 }
